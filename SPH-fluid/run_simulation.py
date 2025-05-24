@@ -245,7 +245,6 @@ if __name__ == "__main__":
                 ps.update_static_mesh_pos(1.0, solver.dt[None])
 
             start_time = time.time()
-
             for i in range(substeps):
                 optIter, pcgIter_total, log_debug, avg_density = solver.step()
 
@@ -259,7 +258,7 @@ if __name__ == "__main__":
                     density_frame_data.append(avg_density)
 
             end_time = time.time()
-
+            print("elapsed time:", end_time - start_time)
             if frame_cnt > 0:
                 elapsed_time_data.append(end_time - start_time)
 

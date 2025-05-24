@@ -227,13 +227,13 @@ class ParticleSystem:
                 for j in range(start_vid, end_vid):
                     # Write down any conditions that you want in the if statement below...
                     # This condition is based on plane_32.obj mesh. (No scale, No rotation, Translation [5,3,5])
-                    # if (4 - epsilon < vertices[j, 0] < 4 + epsilon or
-                    #     6 - epsilon < vertices[j, 0] < 6 + epsilon or  # the x coord condition
-                    #     4 - epsilon < vertices[j, 2] < 4 + epsilon or
-                    #     6 - epsilon < vertices[j, 2] < 6 + epsilon):  # the z coord condition
+                    if (4 - epsilon < vertices[j, 0] < 4 + epsilon or
+                        6 - epsilon < vertices[j, 0] < 6 + epsilon or  # the x coord condition
+                        4 - epsilon < vertices[j, 2] < 4 + epsilon or
+                        6 - epsilon < vertices[j, 2] < 6 + epsilon):  # the z coord condition
                     # if (0.0 == vertices[j, 1]):
 
-                    if vertices[j, 1] < 1.2:
+                    # if vertices[j, 1] < 1.2:
                         self.fixed_vids.append(j)
 
             self.fixed_vids_np = np.array(self.fixed_vids)
