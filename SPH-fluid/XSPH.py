@@ -82,6 +82,7 @@ class XSPHSolver(SPHBase):
         self.da_ratio   = self.ps.cfg.get_cfg("da_ratio")
         self.use_gn     = bool(self.ps.cfg.get_cfg("use_gn"))
         self.use_div    = bool(self.ps.cfg.get_cfg("use_div"))
+        self.use_fluid  = bool(self.ps.cfg.get_cfg("use_fluid"))
         self.ccd = CCDModule()
 
 
@@ -254,25 +255,30 @@ class XSPHSolver(SPHBase):
 
 
     @ti.kernel
-    def advect(self):
+    def advect_fluid(self):
         # Symplectic Euler
         for p_i in ti.grouped(self.ps.x):
             if self.ps.is_dynamic[p_i]:
                 self.ps.v[p_i] += self.dt[None] * self.ps.acceleration[p_i]
                 self.ps.xOld[p_i] = self.ps.x[p_i] + self.dt[None] * self.ps.v[p_i]
 
+    @ti.kernel
+    def advect(self):
         for p_i in ti.grouped(self.ps.x_dy):
             # if self.ps.is_dynamic[p_i]:
             self.ps.v_dy[p_i] += self.dt[None] * ti.Vector(self.g)
             self.ps.xOld_dy[p_i] = self.ps.x_dy[p_i] + self.dt[None] * self.ps.v_dy[p_i]
 
     @ti.kernel
-    def compute_xHat(self):
+    def compute_xHat_fluid(self):
         for p_i in ti.grouped(self.ps.x):
             self.ps.xOld[p_i] = self.ps.x[p_i]
             if self.ps.is_dynamic[p_i]:
                 self.ps.xHat[p_i] = self.ps.xOld[p_i] + self.dt[None] * self.ps.v[p_i]
 
+
+    @ti.kernel
+    def compute_xHat(self):
         for p_i in ti.grouped(self.ps.x_dy):
             self.ps.xOld_dy[p_i] = self.ps.x_dy[p_i]
             # if self.ps.is_dynamic[p_i]:
@@ -280,15 +286,17 @@ class XSPHSolver(SPHBase):
 
 
     @ti.kernel
-    def compute_velocity(self):
+    def compute_velocity_fluid(self):
         for p_i in ti.grouped(self.ps.x):
             self.ps.v[p_i] = (self.ps.x[p_i] - self.ps.xOld[p_i]) / self.dt[None]
 
+    @ti.kernel
+    def compute_velocity(self):
         for p_i in ti.grouped(self.ps.x_dy):
             self.ps.v_dy[p_i] = (self.ps.x_dy[p_i] - self.ps.xOld_dy[p_i]) / self.dt[None]
 
     @ti.kernel
-    def compute_inertia(self):
+    def compute_inertia_fluid(self):
 
         I_3x3 = ti.math.mat3([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
         density = 1e1
@@ -297,6 +305,10 @@ class XSPHSolver(SPHBase):
             self.ps.grad[p_i]  = self.density_0 * self.ps.m_V[p_i] * (self.ps.x[p_i] - self.ps.xHat[p_i])
             self.ps.diagH[p_i] = self.density_0 * self.ps.m_V[p_i] * I_3x3
 
+    @ti.kernel
+    def compute_inertia(self):
+
+        I_3x3 = ti.math.mat3([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
         for p_i in ti.grouped(self.ps.x_dy):
             # self.ps.grad[p_i]  = self.density_0 * self.ps.m_V[p_i] * ti.math.vec3(0.0)
             self.ps.grad_dy[p_i] = self.ps.mass_dy[p_i] * (self.ps.x_dy[p_i] - self.ps.xHat_dy[p_i])
@@ -911,11 +923,13 @@ class XSPHSolver(SPHBase):
         return val
 
     @ti.kernel
-    def update_x(self, alpha: float):
+    def update_x_fluid(self, alpha: float):
 
         for p_i in ti.grouped(self.ps.x):
             self.ps.x[p_i] += alpha * self.ps.dx[p_i]
 
+    @ti.kernel
+    def update_x(self, alpha: float):
         for p_i in ti.grouped(self.ps.x_dy):
             self.ps.x_dy[p_i] += alpha * self.ps.dx_dy[p_i]
 
@@ -1037,6 +1051,78 @@ class XSPHSolver(SPHBase):
         #         Ax_dy[info[2]] -= bary[2] * H @ xAB
         #         Ax_dy[info[3]] -= bary[3] * H @ xAB
 
+    @ti.kernel
+    def mat_free_Ax_fluid(self, Ax: ti.template(), x: ti.template()):
+
+        for p_i in ti.grouped(self.ps.x):
+            Ax[p_i] = self.density_0 * self.ps.m_V[p_i] * x[p_i]
+
+
+        for p_i in ti.grouped(self.ps.x):
+            value = 0.0
+
+            # if self.ps.density[p_i] >= self.density_0:
+            for j in range(self.num_collision_p[p_i]):
+                p_j = self.collision_idx_p[p_i, j]
+                xji = x[p_i] - x[p_j]
+
+                value += self.collision_grad_p[p_i, j].dot(xji)
+
+                Hji = self.collision_H_p[p_i, j]
+                Ax[p_i] += Hji @ xji
+                Ax[p_j] -= Hji @ xji
+
+            for j in range(self.num_collision_p[p_i]):
+                p_j = self.collision_idx_p[p_i, j]
+                grad = self.collision_grad_p[p_i, j]
+                Ax[p_i] += value * grad
+                Ax[p_j] -= value * grad
+
+    @ti.kernel
+    def mat_free_Ax_coupled(self, Ax: ti.template(), x: ti.template(), Ax_dy: ti.template(), x_dy: ti.template()):
+
+        for i in range(self.num_collision_dy[None]):
+            bary = self.collision_bary_dy[i]
+            info = self.collision_info_dy[i]
+            H = self.collision_H_dy[i]
+
+            if self.collision_type_dy[i] == 0:
+
+                p = bary[1] * x_dy[info[1]] + bary[2] * x_dy[info[2]] + bary[3] * x_dy[info[3]]
+                xip = x[info[0]] - p
+
+                Ax[info[0]]    += bary[0] * H @ xip
+                Ax_dy[info[1]] -= bary[1] * H @ xip
+                Ax_dy[info[2]] -= bary[2] * H @ xip
+                Ax_dy[info[3]] -= bary[3] * H @ xip
+
+    @ti.kernel
+    def mat_free_Ax_solid(self, Ax_dy: ti.template(), x_dy: ti.template()):
+
+        for p_i in ti.grouped(self.ps.x_dy):
+            Ax_dy[p_i] = self.ps.mass_dy[p_i] * x_dy[p_i]
+
+
+        # elasticity
+        for i in range(self.ps.edges_dy.shape[0] // 2):
+            v0, v1 = self.ps.edges_dy[2 * i + 0], self.ps.edges_dy[2 * i + 1]
+            x01 = x_dy[v1] - x_dy[v0]
+            Ax_dy[v0] -= self.ps.H_l[i] @ x01
+            Ax_dy[v1] += self.ps.H_l[i] @ x01
+
+        # #bending
+        for i in range(self.ps.edges_bd.shape[0] // 2):
+            v0, v1 = self.ps.edges_bd[2 * i + 0], self.ps.edges_bd[2 * i + 1]
+            x01 = x_dy[v1] - x_dy[v0]
+            Ax_dy[v0] -= self.ps.H_bd[i] @ x01
+            Ax_dy[v1] += self.ps.H_bd[i] @ x01
+
+
+        # fixed_ids = ti.Vector([0, 1, 2, 3], dt=int)
+        k_fix = 1e4 * self.dt[None]
+        for i in range(self.ps.num_fixed_vids_field):
+            vi = self.ps.fixed_vids_field[i]
+            Ax_dy[vi] += k_fix * x_dy[vi]
 
 
     @ti.kernel
@@ -1259,99 +1345,119 @@ class XSPHSolver(SPHBase):
 
     def substep(self):
 
-        v_norm = self.inf_norm(self.ps.v)
-        if v_norm * self.dt[None] > 0.5 * self.ps.support_radius:
-            print("cfl")
-
-        self.compute_non_pressure_forces()
-        self.advect()
-        self.compute_xHat()
 
         optIter = 0
-        numLS = 0
         pcgIter_total = 0
-        pad = 1.2 * self.ps.particle_diameter
-
-
-        Kappa = 1e7 * self.dt[None] * self.dt[None]
         log_debug = []
-        h = 2.0 * self.ps.particle_diameter
-        k = self.k_rho * self.dt[None] * self.dt[None] * (h ** 6)
+        avg_density = 0
+        # v_norm = self.inf_norm(self.ps.v)
+        # if v_norm * self.dt[None] > 0.5 * self.ps.support_radius:
+        #     print("cfl")
+
+        self.compute_non_pressure_forces()
+
+        if self.use_fluid:
+            self.advect_fluid()
+            self.compute_xHat_fluid()
+            self.ps.x.copy_from(self.ps.xHat)
+        
+        self.advect()
+        self.compute_xHat()
+        self.ps.x_dy.copy_from(self.ps.xHat_dy)
+        # optIter = 0
+        # numLS = 0
+        # pcgIter_total = 0
+        # pad = 1.2 * self.ps.particle_diameter
+
+
+        # Kappa = 1e7 * self.dt[None] * self.dt[None]
+        # log_debug = []
+        # h = 2.0 * self.ps.particle_diameter
+        # k = self.k_rho * self.dt[None] * self.dt[None] * (h ** 6)
         k_el = 1e7
         k_b = 1e7
 
 
-        if self.use_gn:
-            self.compute_densities(self.ps.xOld, h)
-            self.precompute_pressure_gn(self.ps.xOld, self.k_rho * self.dt[None] * self.dt[None] * (h ** 3), h)
+        # if self.use_gn:
+        #     self.compute_densities(self.ps.xOld, h)
+        #     self.precompute_pressure_gn(self.ps.xOld, self.k_rho * self.dt[None] * self.dt[None] * (h ** 3), h)
 
-        self.precompute_viscosity(self.ps.xOld, self.viscosity, h)
-        self.LBVH.build(self.ps.x_st, self.ps.faces_st, pad=pad)
+        # self.precompute_viscosity(self.ps.xOld, self.viscosity, h)
+        # self.LBVH.build(self.ps.x_st, self.ps.faces_st, pad=pad)
 
         for _ in range(self.maxOptIter):
+        #     E_k = 0.0
 
-            E_k = 0.0
+            if self.use_fluid:
+                self.compute_inertia_fluid()
+
             self.compute_inertia()
-            if self.use_gn:
-                self.compute_pressure_gn(self.ps.x, self.k_rho * (self.dt[None] ** 2) * (h ** 3), h)
-            else:
-                self.compute_densities(self.ps.x, h)
-                E_k += self.compute_pressure_energy(k, h, eta=self.ps.eta)
-                self.compute_pressure(k, h, eta=self.ps.eta)
+        #     if self.use_gn:
+        #         self.compute_pressure_gn(self.ps.x, self.k_rho * (self.dt[None] ** 2) * (h ** 3), h)
+        #     else:
+        #         self.compute_densities(self.ps.x, h)
+        #         E_k += self.compute_pressure_energy(k, h, eta=self.ps.eta)
+        #         self.compute_pressure(k, h, eta=self.ps.eta)
 
-            self.compute_viscosity()
+        #     self.compute_viscosity()
 
-            self.LBVH_dy.build(self.ps.x_dy, self.ps.faces_dy, pad=pad)
-            # self.LBVH_ee.build(self.ps.x_dy, self.ps.edges_dy, pad=pad)
+        #     self.LBVH_dy.build(self.ps.x_dy, self.ps.faces_dy, pad=pad)
+        #     # self.LBVH_ee.build(self.ps.x_dy, self.ps.edges_dy, pad=pad)
 
-            self.compute_collision_dynamic(Kappa, pad=pad)
-            self.compute_collision_static(Kappa, pad)
+        #     self.compute_collision_dynamic(Kappa, pad=pad)
+        #     self.compute_collision_static(Kappa, pad)
             self.compute_elasticity(k_el, k_b)
 
-            # pcgIter = 0
-            if self.use_gn:
-                pcgIter_total += self.PCG.solve(self.ps.dx, self.ps.grad, self.ps.diagH,
-                                                self.ps.dx_dy, self.ps.grad_dy, self.ps.diagH_dy, 1e-5, self.mat_free_Ax2)
-            else:
-                pcgIter_total += self.PCG.solve(self.ps.dx, self.ps.grad, self.ps.diagH,
-                                                self.ps.dx_dy, self.ps.grad_dy, self.ps.diagH_dy, 1e-5, self.mat_free_Ax)
+        #     # pcgIter = 0
+        #     if self.use_gn:
+        #         pcgIter_total += self.PCG.solve(self.ps.dx, self.ps.grad, self.ps.diagH,
+        #                                         self.ps.dx_dy, self.ps.grad_dy, self.ps.diagH_dy, 1e-5, self.mat_free_Ax2)
+        #     else:
+            pcgIter_total += self.PCG.solve(self.ps.dx, self.ps.grad, self.ps.diagH, self.ps.dx_dy, self.ps.grad_dy, self.ps.diagH_dy, 1e-5, 
+                                            self.mat_free_Ax_fluid, self.mat_free_Ax_solid, self.mat_free_Ax_coupled, self.use_fluid)
 
+            dx_norm = 1e5
+            if self.use_fluid:
+                dx_norm = self.inf_norm(self.ps.dx)
+            
+            dx_norm = ti.min(self.inf_norm(self.ps.dx_dy), dx_norm)
 
-            dx_norm = self.inf_norm(self.ps.dx)
-            dx_norm_dy = self.inf_norm(self.ps.dx_dy)
-
-
-            if dx_norm_dy > dx_norm:
-                dx_norm = dx_norm_dy
-
+        #     if dx_norm_dy > dx_norm:
+        #         dx_norm = dx_norm_dy
             alpha = 1.0
-            if self.use_div:
-                alpha_div = self.filter_step_size_div(self.ps.x, self.ps.dx, h, self.da_ratio)
-                if alpha_div < 1.0:
-                    print(alpha_div)
-                    numLS += 1
-                alpha = ti.min(alpha_div, alpha)
+        #     if self.use_div:
+        #         alpha_div = self.filter_step_size_div(self.ps.x, self.ps.dx, h, self.da_ratio)
+        #         if alpha_div < 1.0:
+        #             print(alpha_div)
+        #             numLS += 1
+        #         alpha = ti.min(alpha_div, alpha)
 
             
-            alpha_ccd = self.filter_step_size_ccd(self.ps.x, self.ps.dx, self.ps.x_dy, self.ps.dx_dy)
-            if alpha_ccd < 1.0:
-                print("alpha_ccd", alpha_ccd)
-            alpha = ti.min(alpha_ccd, alpha)
+        #     alpha_ccd = self.filter_step_size_ccd(self.ps.x, self.ps.dx, self.ps.x_dy, self.ps.dx_dy)
+        #     if alpha_ccd < 1.0:
+        #         print("alpha_ccd", alpha_ccd)
+        #     alpha = ti.min(alpha_ccd, alpha)
 
+
+            if self.use_fluid:
+                self.update_x(alpha)
 
             self.update_x(alpha)
             if dx_norm < self.tol * self.dt[None]:
                 break
 
-            optIter += 1
-            dx_norm_old = dx_norm
-            log_debug.append(dx_norm)
+        #     optIter += 1
+        #     dx_norm_old = dx_norm
+        #     log_debug.append(dx_norm)
 
-        print("opt/pcg/LS iter:", optIter, pcgIter_total, numLS)
+        # print("opt/pcg/LS iter:", optIter, pcgIter_total, numLS)
+
+        if self.use_fluid:
+            self.compute_velocity_fluid()
+
         self.compute_velocity()
-
-        self.compute_densities(self.ps.x, h)
-        avg_density = self.avg_density()
+        # self.compute_densities(self.ps.x, h)
+        # avg_density = self.avg_density()
 
         # if optIter == self.maxOptIter:
         #     print("Failed to converge...")

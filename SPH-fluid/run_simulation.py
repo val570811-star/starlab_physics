@@ -28,6 +28,7 @@ if __name__ == "__main__":
     output_ply = config.get_cfg("exportPly")
     output_obj = config.get_cfg("exportObj")
     output_vtk = config.get_cfg("exportVtk")
+    use_fluid = config.get_cfg("use_fluid")
     series_prefix = "{}_output/particle_object_{}.ply".format(scene_name, "{}")
     if output_frames:
         os.makedirs(f"{scene_name}_output_img", exist_ok=True)
@@ -286,7 +287,9 @@ if __name__ == "__main__":
             scene.point_light((0.0, 0.0, 0.0), color=(1.0, 1.0, 1.0))
 
             scene.point_light((2.0, 0.0, 2.0), color=(1.0, 1.0, 1.0))
-            scene.particles(ps.x_vis_buffer, radius=ps.particle_radius, per_vertex_color=ps.color_vis_buffer)
+
+            if use_fluid:
+                scene.particles(ps.x_vis_buffer, radius=ps.particle_radius, per_vertex_color=ps.color_vis_buffer)
 
             # scene.particles(ps.xTmp, radius=ps.particle_radius, per_vertex_color=ps.color_vis_buffer)
             scene.lines(box_anchors, indices=box_lines_indices, color = (0.99, 0.68, 0.28), width = 1.0)

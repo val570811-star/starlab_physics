@@ -31,20 +31,22 @@ class PCG:
         for i in z:
             z[i] = hii[i].inverse() @ r[i]
 
-    def solve(self, x, b, hii, x_dy, b_dy, hii_dy, tol, matFreeAx):
+    def solve(self, x, b, hii, x_dy, b_dy, hii_dy, tol, matFreeAx_fluid, matFreeAx_solid, matFreeAx_coupled, use_fluid):
 
+        rs_old = 0.0 
+        if use_fluid:
+            x.fill(0)
+            self.r.copy_from(b)
+            self.applyPrecondition(self.z, hii, self.r)
+            self.p.copy_from(self.z)
+            rs_old += dot(self.r, self.z)
+            
 
-        x.fill(0)
+          
         x_dy.fill(0)
-
-        self.r.copy_from(b)
         self.r_dy.copy_from(b_dy)
-        self.applyPrecondition(self.z, hii, self.r)
         self.applyPrecondition(self.z_dy, hii_dy, self.r_dy)
-
-        self.p.copy_from(self.z)
         self.p_dy.copy_from(self.z_dy)
-        rs_old = dot(self.r, self.z)
         rs_old += dot(self.r_dy, self.z_dy)
 
         itrCnt = 0
@@ -55,8 +57,13 @@ class PCG:
         maxPCGIter = int(1e4)
         for i in range(maxPCGIter):
 
-            matFreeAx(self.Ap, self.p, self.Ap_dy, self.p_dy)
-            pAp = dot(self.p, self.Ap)
+            if use_fluid:
+                matFreeAx_fluid(self.Ap, self.p)
+
+            matFreeAx_solid(self.Ap_dy, self.p_dy)
+            pAp = 0.0 
+            if use_fluid:
+                pAp = dot(self.p, self.Ap)
             pAp += dot(self.p_dy, self.Ap_dy)
 
             # if pAp < 0:
@@ -75,14 +82,24 @@ class PCG:
                 # exit()
                 # break
             # print("alpha: ", alpha)
-            add(x, x, alpha, self.p)
+
+            if use_fluid:
+                add(x, x, alpha, self.p)
+                add(self.r, self.r, -alpha, self.Ap)
+
             add(x_dy, x_dy, alpha, self.p_dy)
-            add(self.r, self.r, -alpha, self.Ap)
             add(self.r_dy, self.r_dy, -alpha, self.Ap_dy)
 
-            self.applyPrecondition(self.z, hii, self.r)
+            if use_fluid:
+                self.applyPrecondition(self.z, hii, self.r)
+
             self.applyPrecondition(self.z_dy, hii_dy, self.r_dy)
-            rs_new = dot(self.r, self.z)
+
+
+            rs_new = 0.0
+            if use_fluid:
+                rs_new = dot(self.r, self.z)
+
             rs_new += dot(self.r_dy, self.z_dy)
             #
             # if isnan(rs_new):
@@ -94,7 +111,10 @@ class PCG:
                 # print("rs_new: ", rs_new)
                 break
             beta = rs_new / rs_old
-            add(self.p, self.z, beta, self.p)
+
+            if use_fluid:
+                add(self.p, self.z, beta, self.p)
+
             add(self.p_dy, self.z_dy, beta, self.p_dy)
             rs_old = rs_new
 
@@ -109,7 +129,10 @@ class PCG:
         # x.copy_from(self.s)
 
         # add(x, x, alpha, self.p)
-        scale(x, -1.0, x)
+
+        if use_fluid:
+            scale(x, -1.0, x)
+
         scale(x_dy, -1.0, x_dy)
 
         return itrCnt
