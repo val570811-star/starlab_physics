@@ -50,14 +50,14 @@ class XSPHSolver(SPHBase):
         self.num_candidate_self  = ti.field(int, shape=())
         self.candidate_info_self = ti.Vector.field(n=3, dtype=int, shape=self.num_max_collision)
         self.num_collision_self  = ti.field(int, shape=())
-        self.collision_info_self = ti.Vector.field(n=4, dtype=int, shape=self.num_max_collision)
-        self.collision_bary_self = ti.Vector.field(n=4, dtype=float, shape=self.num_max_collision)
+        self.self_collision_info_ee = ti.Vector.field(n=4, dtype=int, shape=self.num_max_collision)
+        self.self_collision_bary_ee = ti.Vector.field(n=4, dtype=float, shape=self.num_max_collision)
         self.collision_type_self = ti.field(int, shape=self.num_max_collision)
-        self.collision_H_self    = ti.Matrix.field(n=3, m=3, dtype=float, shape=self.num_max_collision)
+        self.self_collision_H_ee    = ti.Matrix.field(n=3, m=3, dtype=float, shape=self.num_max_collision)
 
         self.num_candidate_ee  = ti.field(int, shape=())
         self.candidate_info_ee = ti.Vector.field(n=3, dtype=int, shape=self.num_max_collision)
-        self.num_collision_ee  = ti.field(int, shape=())
+        self.num_self_collision_ee  = ti.field(int, shape=())
         self.collision_info_ee = ti.Vector.field(n=4, dtype=int, shape=self.num_max_collision)
         self.collision_bary_ee = ti.Vector.field(n=4, dtype=float, shape=self.num_max_collision)
         self.collision_type_ee = ti.field(int, shape=self.num_max_collision)
@@ -555,7 +555,6 @@ class XSPHSolver(SPHBase):
                 self.ps.diagH[p_i] += k * (grad_i.outer_product(grad_i))
                 self.ps.diagH[p_j] += k * (grad_i.outer_product(grad_i))
 
-
     @ti.kernel
     def compute_collision_static(self, Kappa: float, pad: float):
 
@@ -636,7 +635,174 @@ class XSPHSolver(SPHBase):
     #
     # @ti.kernel
     # def compute_collision_static_energy(self, pad: float):
-    #
+
+    @ti.kernel
+    def compute_self_collision_ee(self, Kappa: float, pad: float):
+
+        # I_3x3 = ti.math.mat3([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+        self.num_candidate_ee[None] = 0
+        dHat = 0.5 * pad
+        for ei in range(self.ps.edges_dy.shape[0] // 2):
+            v0, v1 = self.ps.edges_dy[2 * ei + 0], self.ps.edges_dy[2 * ei + 1]
+            x0, x1 = self.ps.x_dy[v0], self.ps.x_dy[v1]
+            _min0 = ti.min(x0, x1) - ti.math.vec3(pad)
+            _max0 = ti.max(x0, x1) + ti.math.vec3(pad)
+            self.LBVH_ee.traverse_bvh_single_test(_min0, _max0, 1, ei, self.candidate_info_ee, self.num_candidate_ee)
+
+        # cnt = 0
+        # x0 = ti.math.vec3(0.0,  0.0, 0.0)
+        # x1 = ti.math.vec3(1.0,  0.0, 0.0)
+
+        # # segment 2 from x2 to x3, along the y-axis, crossing at the origin
+        # x2 = ti.math.vec3(0.5, 0.5, 0.0)
+        # x3 = ti.math.vec3(0.5, -0.5, 0.0)
+
+        # weights = d_EE(x0, x1, x2, x3)
+
+        # print(weights)
+
+        # print("___")
+        self.num_self_collision_ee[None] = 0
+        # print(self.ps.edges_dy.shape[0] // 2)
+        # for ei in range(self.ps.edges_dy.shape[0] // 2 - 1):
+        #     for ej in range(ei + 1, self.ps.edges_dy.shape[0] // 2):
+        for i in range(self.num_candidate_ee[None]):
+
+            info = self.candidate_info_ee[i]
+            ei = info[0]
+            ej = info[1]
+
+            vi0, vi1 = self.ps.edges_dy[2 * ei + 0], self.ps.edges_dy[2 * ei + 1]
+            vj0, vj1 = self.ps.edges_dy[2 * ej + 0], self.ps.edges_dy[2 * ej + 1]
+
+            if ei == ej:
+                continue
+            
+            if vi0 == vj0 or vi0 == vj1 or vi1 == vj0 or vi1 == vj1:
+                continue
+            
+            xi0, xi1 = self.ps.x_dy[vi0], self.ps.x_dy[vi1]
+            xj0, xj1 = self.ps.x_dy[vj0], self.ps.x_dy[vj1]
+
+            # is_para = ti.math.cross(xi1 - xi0, xj1 - xj0).norm() < 1e-6
+
+            # if is_para:
+            #     continue
+            type = d_type_EE(xi0, xi1, xj0, xj1)
+            bary = d_EE(xi0, xi1, xj0, xj1)
+            projAB = bary[0] * xi0 + bary[1] * xi1 - (bary[2] * xj0 + bary[3] * xj1)
+            d = projAB.norm()
+            n = projAB / d
+            if d <= dHat:
+                
+                # if type == 8:
+                # print(d, ei, ej)
+                # print(vi0, vi1, vj0, vj1)
+                dbdx = self.barrier_grad(d, dHat)
+                d2bdx2 = self.barrier_hess(d, dHat)
+
+                nnT = n.outer_product(n)
+                test = (d2bdx2 * nnT)
+                self.ps.diagH_dy[vi0] += bary[0] * bary[0] * Kappa * test
+                self.ps.diagH_dy[vi1] += bary[1] * bary[1] * Kappa * test
+
+                self.ps.diagH_dy[vj0] += bary[2] * bary[2] * Kappa * test
+                self.ps.diagH_dy[vj1] += bary[3] * bary[3] * Kappa * test
+
+                self.ps.grad_dy[vi0] += bary[0] * Kappa * dbdx * n
+                self.ps.grad_dy[vi1] += bary[1] * Kappa * dbdx * n
+
+                self.ps.grad_dy[vj0] -= bary[2] * Kappa * dbdx * n
+                self.ps.grad_dy[vj1] -= bary[3] * Kappa * dbdx * n
+
+                idx = ti.atomic_add(self.num_self_collision_ee[None], 1)
+                self.self_collision_H_ee[idx]    = Kappa * test
+                self.self_collision_info_ee[idx] = ti.math.ivec4([vi0, vi1, vj0, vj1])
+                self.self_collision_bary_ee[idx] = ti.math.vec4([bary[0], bary[1], bary[2], bary[3]])
+
+            # type = d_type_EE(xi0, xi1, xj0, xj1)
+            # bary = ti.math.vec4(0.0)
+            # if type == 0: # xi0, xj0 
+            #     bary[0] = 1.0
+            #     bary[2] = 1.0  
+
+            # elif type == 1: # xi0, xj1 
+            #     bary[0] = 1.0
+            #     bary[3] = 1.0
+
+            # elif type == 2:
+            #     a = d_PE(xi0, xj0, xj1)
+            #     bary[0] = 1.0
+            #     bary[2] = a[0]
+            #     bary[3] = a[1]
+
+            # elif type == 3: # xi1, xj0  
+            #     bary[1] = 1.0
+            #     bary[2] = 1.0
+
+            # elif type == 4: # xi1, xj1 
+            #     bary[1] = 1.0
+            #     bary[3] = 1.0
+
+            # elif type == 5:
+            #     a = d_PE(xi1, xj0, xj1)
+            #     bary[1] = 1.0
+            #     bary[2] = a[0]
+            #     bary[3] = a[1]
+
+            # elif type == 6:
+            #     a = d_PE(xj0, xi0, xi1)
+            #     bary[0] = a[0]
+            #     bary[1] = a[1]
+            #     bary[2] = 1.0
+
+            # elif type == 7:
+            #     a = d_PE(xj1, xi0, xi1)
+            #     bary[0] = a[0]
+            #     bary[1] = a[1]
+            #     bary[3] = 1.0
+
+            # elif type == 8:
+            #     a = d_EE(xi0, xi1, xj0, xj1)
+            #     bary[0] = a[0]
+            #     bary[1] = a[1]
+            #     bary[2] = a[2]
+            #     bary[3] = a[3]
+
+            # cnt += 1
+            # projAB = bary[0] * xi0 + bary[1] * xi1 - (bary[2] * xj0 + bary[3] * xj1)
+            # d = projAB.norm()
+            # n = projAB / d
+            # if d <= dHat:
+            #     dbdx = self.barrier_grad(d, dHat)
+            #     d2bdx2 = self.barrier_hess(d, dHat)
+
+            #     nnT = n.outer_product(n)
+            #     d2d_dx2 = (I_3x3 - nnT) / d
+            #     test = (d2bdx2 * nnT)
+            #     self.ps.diagH_dy[vi0] += bary[0] * Kappa * test
+            #     self.ps.diagH_dy[vi0] += bary[1] * Kappa * test
+
+            #     self.ps.diagH_dy[vi0] -= bary[2] * Kappa * test
+            #     self.ps.diagH_dy[vi0] -= bary[3] * Kappa * test
+
+            #     self.ps.grad_dy[vi0] += bary[0] * Kappa * dbdx * n
+            #     self.ps.grad_dy[vi1] += bary[1] * Kappa * dbdx * n
+
+            #     self.ps.grad_dy[vj0] -= bary[2] * Kappa * dbdx * n
+            #     self.ps.grad_dy[vj1] -= bary[3] * Kappa * dbdx * n
+
+            #     idx = ti.atomic_add(self.num_self_collision_ee[None], 1)
+            #     self.collision_H_ee[idx] = Kappa * test
+            #     self.collision_info_ee[idx] = ti.math.ivec4([vi0, vi1, vj0, vj1])
+            #     self.collision_bary_ee[idx] = ti.math.vec4([bary[0], bary[1], bary[2], bary[3]])
+
+        # for i in range(self.num_self_collision_ee[None]):
+        #     info = self.self_collision_info_ee[i]
+        #     print(info)
+
+        # print("num_candidate_ee after", self.num_candidate_ee[None], "cnt", cnt)
+        # print("num_self_collision_ee", self.num_self_collision_ee[None])
 
 
     @ti.kernel
@@ -652,7 +818,7 @@ class XSPHSolver(SPHBase):
 
 
         self.num_candidate_self[None] = 0
-        self.num_collision_ee[None] = 0
+        self.num_self_collision_ee[None] = 0
 
         # dHat_self = 0.1 * pad
 
@@ -819,10 +985,10 @@ class XSPHSolver(SPHBase):
                     self.ps.grad_dy[T2] -= bary[2] * Kappa * dbdx * n
 
                     idx = ti.atomic_add(self.num_collision_self[None], 1)
-                    self.collision_H_self[idx] = Kappa * test
-                    self.collision_info_self[idx] = ti.math.ivec4([P, T0, T1, T2]) 
+                    self.self_collision_H_ee[idx] = Kappa * test
+                    self.self_collision_info_ee[idx] = ti.math.ivec4([P, T0, T1, T2]) 
                     self.collision_type_self[idx] = 0
-                    self.collision_bary_self[idx] = ti.math.vec4([1.0, bary[0], bary[1], bary[2]])
+                    self.self_collision_bary_ee[idx] = ti.math.vec4([1.0, bary[0], bary[1], bary[2]])
 
         
         # if self.num_collision_self[None] > 0:
@@ -1021,9 +1187,9 @@ class XSPHSolver(SPHBase):
                 Ax_dy[info[3]] -= bary[3] * H @ xip
 
         for i in range(self.num_collision_self[None]):
-            bary = self.collision_bary_self[i]
-            info = self.collision_info_self[i]
-            H = self.collision_H_self[i]
+            bary = self.self_collision_bary_ee[i]
+            info = self.self_collision_info_ee[i]
+            H = self.self_collision_H_ee[i]
 
             if self.collision_type_self[i] == 0:
 
@@ -1101,8 +1267,7 @@ class XSPHSolver(SPHBase):
 
         for p_i in ti.grouped(self.ps.x_dy):
             Ax_dy[p_i] = self.ps.mass_dy[p_i] * x_dy[p_i]
-
-
+     
         # elasticity
         for i in range(self.ps.edges_dy.shape[0] // 2):
             v0, v1 = self.ps.edges_dy[2 * i + 0], self.ps.edges_dy[2 * i + 1]
@@ -1123,6 +1288,22 @@ class XSPHSolver(SPHBase):
         for i in range(self.ps.num_fixed_vids_field):
             vi = self.ps.fixed_vids_field[i]
             Ax_dy[vi] += k_fix * x_dy[vi]
+
+
+        for i in range(self.num_self_collision_ee[None]):
+            bary = self.self_collision_bary_ee[i]
+            info = self.self_collision_info_ee[i]
+            # print(self.self_collision_info_ee[i])
+            H = self.self_collision_H_ee[i]
+            # print(i, info, H)
+        #     # if self.collision_type_self[i] == 0:
+
+            xip = bary[0] * x_dy[info[0]] + bary[1] * x_dy[info[1]] - (bary[2] * x_dy[info[2]] + bary[3] * x_dy[info[3]])
+
+            Ax_dy[info[0]] += bary[0] * H @ xip
+            Ax_dy[info[1]] += bary[1] * H @ xip
+            Ax_dy[info[2]] -= bary[2] * H @ xip
+            Ax_dy[info[3]] -= bary[3] * H @ xip
 
 
     @ti.kernel
@@ -1201,9 +1382,6 @@ class XSPHSolver(SPHBase):
                 Ax_dy[info[1]] -= bary[1] * H @ xip
                 Ax_dy[info[2]] -= bary[2] * H @ xip
                 Ax_dy[info[3]] -= bary[3] * H @ xip
-
-
-
 
     def build_static_LBVH(self):
         pad = 0.5 * self.ps.particle_diameter
@@ -1367,10 +1545,8 @@ class XSPHSolver(SPHBase):
         # optIter = 0
         # numLS = 0
         # pcgIter_total = 0
-        # pad = 1.2 * self.ps.particle_diameter
-
-
-        # Kappa = 1e7 * self.dt[None] * self.dt[None]
+        pad = 0.01
+        Kappa = 1e6 
         # log_debug = []
         # h = 2.0 * self.ps.particle_diameter
         # k = self.k_rho * self.dt[None] * self.dt[None] * (h ** 6)
@@ -1402,9 +1578,9 @@ class XSPHSolver(SPHBase):
         #     self.compute_viscosity()
 
         #     self.LBVH_dy.build(self.ps.x_dy, self.ps.faces_dy, pad=pad)
-        #     # self.LBVH_ee.build(self.ps.x_dy, self.ps.edges_dy, pad=pad)
-
-        #     self.compute_collision_dynamic(Kappa, pad=pad)
+            self.LBVH_ee.build(self.ps.x_dy, self.ps.edges_dy, pad=pad)
+            self.compute_self_collision_ee(Kappa, pad = pad)
+            # print(self.collision_info_ee)
         #     self.compute_collision_static(Kappa, pad)
             self.compute_elasticity(k_el, k_b)
 
@@ -1413,8 +1589,17 @@ class XSPHSolver(SPHBase):
         #         pcgIter_total += self.PCG.solve(self.ps.dx, self.ps.grad, self.ps.diagH,
         #                                         self.ps.dx_dy, self.ps.grad_dy, self.ps.diagH_dy, 1e-5, self.mat_free_Ax2)
         #     else:
+
+            # if self.num_self_collision_ee[None] > 0:
+            # print("self collision", self.self_collision_info_ee)
+            # for i in range(self.num_self_collision_ee[None]):
+            #     info = self.collision_info_ee[i]
+            #     print(info)
+
             pcgIter_total += self.PCG.solve(self.ps.dx, self.ps.grad, self.ps.diagH, self.ps.dx_dy, self.ps.grad_dy, self.ps.diagH_dy, 1e-5, 
                                             self.mat_free_Ax_fluid, self.mat_free_Ax_solid, self.mat_free_Ax_coupled, self.use_fluid)
+
+         
 
             dx_norm = 1e5
             if self.use_fluid:

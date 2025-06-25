@@ -47,7 +47,7 @@ def d_type_PT(v0: ti.math.vec3, v1: ti.math.vec3, v2: ti.math.vec3, v3: ti.math.
 
 
 @ti.func
-def d_PT( p: ti.math.vec3, x0: ti.math.vec3, x1: ti.math.vec3, x2: ti.math.vec3)->ti.math.vec3:
+def d_PT(p: ti.math.vec3, x0: ti.math.vec3, x1: ti.math.vec3, x2: ti.math.vec3) -> ti.math.vec3:
     # 1) Build vectors in the plane
     E0 = x1 - x0
     E1 = x2 - x0
@@ -82,6 +82,42 @@ def d_PT( p: ti.math.vec3, x0: ti.math.vec3, x1: ti.math.vec3, x2: ti.math.vec3)
     a2 = v
 
     return ti.math.vec3([a0, a1, a2])
+
+@ti.func
+def d_EE(x0: ti.math.vec3, x1: ti.math.vec3, x2: ti.math.vec3, x3: ti.math.vec3) -> ti.math.vec4:
+
+    u = x1 - x0
+    v = x3 - x2
+    # Vector between origins
+    w = x0 - x2
+
+    # Dot products
+    a = u.dot(u)
+    b = u.dot(v)
+    c = v.dot(v)
+    d = u.dot(w)
+    e = v.dot(w)
+
+    # Determinant
+    det = a * c - b * b
+
+    # if det > 1e-12:
+
+    # Solve for parameters s, t on infinite lines
+    s = (b * e - c * d) / det
+    t = (a * e - b * d) / det
+
+    # Clamp to segment extents
+    s = ti.max(0.0, ti.min(1.0, s))
+    t = ti.max(0.0, ti.min(1.0, t))
+
+    # Convert to barycentric weights for each endpoint
+    w0 = 1.0 - s
+    w1 = s
+    w2 = 1.0 - t
+    w3 = t
+
+    return ti.math.vec4([w0, w1, w2, w3])
 
 
 @ti.func

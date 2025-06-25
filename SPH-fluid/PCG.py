@@ -40,8 +40,7 @@ class PCG:
             self.applyPrecondition(self.z, hii, self.r)
             self.p.copy_from(self.z)
             rs_old += dot(self.r, self.z)
-            
-
+        
           
         x_dy.fill(0)
         self.r_dy.copy_from(b_dy)

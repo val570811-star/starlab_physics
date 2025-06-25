@@ -259,7 +259,7 @@ if __name__ == "__main__":
                     density_frame_data.append(avg_density)
 
             end_time = time.time()
-            print("elapsed time:", end_time - start_time)
+            # print("elapsed time:", end_time - start_time)
             if frame_cnt > 0:
                 elapsed_time_data.append(end_time - start_time)
 
@@ -296,7 +296,7 @@ if __name__ == "__main__":
             canvas.scene(scene)
             # solver.LBVH_dy.draw_bvh_aabb_test(scene, 0)
             
-            solver.LBVH_dy.draw_bvh_aabb_test(scene,  solver.LBVH_dy.num_leafs)
+            solver.LBVH_ee.draw_bvh_aabb_test(scene,  solver.LBVH_ee.num_leafs)
             # print("num leafs: ", solver.LBVH_ee.num_leafs)
             if ps.num_static_vertices > 0:
                 # scene.mesh(ps.x_st, ps.faces_st, color=(1.5, 1.0, 0.0))

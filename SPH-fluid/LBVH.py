@@ -397,10 +397,12 @@ class LBVH:
             if self.aabb_overlap(min0, max0, min1, max1):
                 if idx < self.num_leafs:
                     # print("test")
+
+                    # if type == 1 and i != self._ids[idx]:
+                    #     n = ti.atomic_add(num[None], 1)
+                    #     cache[n] = ti.math.ivec3([i, self._ids[idx], type])
+                    # else:
                     n = ti.atomic_add(num[None], 1)
-                    
-
-
                     cache[n] = ti.math.ivec3([i, self._ids[idx], type])
                     # ti.atomic_add(num[None], 1)
                 else:
