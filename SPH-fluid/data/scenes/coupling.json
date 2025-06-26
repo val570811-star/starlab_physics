@@ -67,7 +67,7 @@
 			"objectId": 0,
 			"geometryFile": "./data/models/square.obj",
 			"translation": [5, 4, 5],
-			"scale": [0.3, 0.3, 0.3],
+			"scale": [0.5, 0.5, 0.5],
 			"rotationAxis": [0, 1, 0],
 			"rotationAngle": 45
 		}

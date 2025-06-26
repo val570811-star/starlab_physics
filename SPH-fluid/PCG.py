@@ -31,8 +31,11 @@ class PCG:
         for i in z:
             z[i] = hii[i].inverse() @ r[i]
 
-    def solve(self, x, b, hii, x_dy, b_dy, hii_dy, tol, matFreeAx_fluid, matFreeAx_solid, matFreeAx_coupled, use_fluid):
+    def solve(self, x, b, hii, x_dy, b_dy, hii_dy, tol, matFreeAx_fluid, matFreeAx_solid, matFreeAx_coupled, use_fluid, test):
 
+
+        # print(test[None])        
+        # matFreeAx_coupled()
         rs_old = 0.0 
         if use_fluid:
             x.fill(0)
