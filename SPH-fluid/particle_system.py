@@ -5,6 +5,7 @@ from functools import reduce
 from config_builder import SimConfig
 from WCSPH import WCSPHSolver
 from DFSPH import DFSPHSolver
+# from DFSPH2 import DFSPH2Solver
 from XSPH import XSPHSolver
 from mesh_utils import *
 import meshio as mio
@@ -89,13 +90,16 @@ class ParticleSystem:
         for fluid in fluid_blocks:
             if fluid["geometryFile"] == "":
                 particle_num = self.compute_cube_particle_num(fluid["start"], fluid["end"])
-                print("particle num: ", particle_num)
+
+                self.object_collection[fluid["objectId"]] = fluid
+                print("fluid block particle num: ", particle_num)
             else:
                 voxelized_points = mesh_to_filled_particles(fluid["geometryFile"], voxel_size=voxel_size)
                 particle_num = voxelized_points.shape[0]
 
                 fluid["particleNum"] = particle_num
                 self.object_collection[fluid["objectId"]] = fluid
+
             fluid_particle_num += particle_num
 
 
@@ -185,6 +189,7 @@ class ParticleSystem:
         # print(edges.shape)
 
         if self.num_dynamic_vertices > 0:
+            # self.color = ti.Vector.field(3, dtype=fluid, shape=self.num_dynamic_vertices)
             self.mass_dy = ti.field(float, shape=self.num_dynamic_vertices)
             self.x_dy = ti.Vector.field(self.dim, float, shape=self.num_dynamic_vertices)
             self.v_dy = ti.Vector.field(self.dim, float, shape=self.num_dynamic_vertices)
@@ -241,8 +246,8 @@ class ParticleSystem:
             self.num_fixed_vids_field = len(self.fixed_vids)
             self.fixed_vids_field.from_numpy(self.fixed_vids_np)
 
-            print("The fixed dynamic vertices list : ", self.fixed_vids_field)
-            print("The fixed dynamic vertices list length : ", self.num_fixed_vids_field)
+            # print("The fixed dynamic vertices list : ", self.fixed_vids_field)
+            # print("The fixed dynamic vertices list length : ", self.num_fixed_vids_field)
 
             #######################################################################
             # print(self.mass_dy)
@@ -277,7 +282,6 @@ class ParticleSystem:
         self.xTmp = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.xHat = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.xOld = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
-
         self.grad  = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.dx    = ti.Vector.field(self.dim, dtype=float, shape=self.particle_max_num)
         self.diagH = ti.Matrix.field(self.dim, self.dim, dtype=float, shape=self.particle_max_num)
@@ -330,6 +334,7 @@ class ParticleSystem:
         # Fluid block
         for fluid in fluid_blocks:
             if fluid["geometryFile"] == "":
+                # print("test fluid block")
                 obj_id = fluid["objectId"]
                 offset = np.array(fluid["translation"])
                 start = np.array(fluid["start"]) + offset
@@ -338,6 +343,13 @@ class ParticleSystem:
                 velocity = fluid["velocity"]
                 density = fluid["density"]
                 color = fluid["color"]
+
+                # print("test fluid block")
+
+                # print(self.x.shape)
+
+                # self.x.fill([5.0, 5.0, 5.0])
+                # self.color.fill([50, 100, 200])               
                 self.add_cube(object_id=obj_id,
                               lower_corner=start,
                               cube_size=(end - start) * scale,
@@ -347,6 +359,8 @@ class ParticleSystem:
                               color=color,
                               material=1)  # 1 indicates fluid
             else:
+
+
                 obj_id = fluid["objectId"]
                 offset = np.array(fluid["translation"])
                 scale = np.array(fluid["scale"])
@@ -371,6 +385,20 @@ class ParticleSystem:
                 density_arr = np.full(num_particles, density, dtype=np.float32)
                 pressure_arr = np.full(num_particles, 0, dtype=np.float32)
 
+
+                # self.x.from_numpy(voxelized_points)
+
+                # self.x.fill([5.0, 5.0, 5.0])
+                # self.color.fill([50, 100, 200])               
+
+                # print(color_arr[0])
+
+                # self.color.from_numpy(color_arr) 
+                # self.is_dynamic.from_numpy(is_dynamic_arr)
+                # self.v.fill(0.0)
+                # self.color_vis_buffer.fill([0.0, 0.0, 1.0])
+
+                # print("test", self.x.shape)
                 self.add_particles(obj_id, num_particles, voxelized_points, velocity_arr,
                                    density_arr, pressure_arr, material_arr, is_dynamic_arr, color_arr)
         
@@ -427,6 +455,8 @@ class ParticleSystem:
             return DFSPHSolver(self)
         elif solver_type == 5:
             return XSPHSolver(self)
+        # elif solver_type == 6:
+        #     return DFSPH2Solver(self)
         else:
             raise NotImplementedError(f"Solver type {solver_type} has not been implemented.")
 
@@ -754,20 +784,23 @@ class ParticleSystem:
 
         num_dim = []
         for i in range(self.dim):
-            num_dim.append(
-                np.arange(lower_corner[i], lower_corner[i] + cube_size[i],
-                          self.particle_diameter))
-        num_new_particles = reduce(lambda x, y: x * y,
-                                   [len(n) for n in num_dim])
+            num_dim.append(np.arange(lower_corner[i], lower_corner[i] + cube_size[i], self.particle_diameter))
+        num_new_particles = reduce(lambda x, y: x * y, [len(n) for n in num_dim])
         print('particle num ', num_new_particles)
 
         new_positions = np.array(np.meshgrid(*num_dim,
                                              sparse=False,
                                              indexing='ij'),
                                  dtype=np.float32)
-        new_positions = new_positions.reshape(-1,
-                                              reduce(lambda x, y: x * y, list(new_positions.shape[1:]))).transpose()
-        print("new position shape ", new_positions.shape)
+        new_positions = new_positions.reshape(-1, reduce(lambda x, y: x * y, list(new_positions.shape[1:]))).transpose()
+        
+        # print(new_positions)
+        # print("new position shape ", new_positions.shape)
+
+        # print("test", self.x.shape)
+        # print(new_positions.shape)
+
+
         if velocity is None:
             velocity_arr = np.full_like(new_positions, 0, dtype=np.float32)
         else:
@@ -778,6 +811,10 @@ class ParticleSystem:
         color_arr = np.stack([np.full_like(np.zeros(num_new_particles, dtype=np.int32), c) for c in color], axis=1)
         density_arr = np.full_like(np.zeros(num_new_particles, dtype=np.float32), density if density is not None else 1000.)
         pressure_arr = np.full_like(np.zeros(num_new_particles, dtype=np.float32), pressure if pressure is not None else 0.)
+        
+
+        # self.x.fill([1.0, 1.0, 1.0])
+        # self.x.from_numpy(new_positions)
         self.add_particles(object_id, num_new_particles, new_positions, velocity_arr, density_arr, pressure_arr, material_arr, is_dynamic_arr, color_arr)
 
     def initBendingIndices(self):

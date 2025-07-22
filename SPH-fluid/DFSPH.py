@@ -1,7 +1,5 @@
 import taichi as ti
 from sph_base import SPHBase
-
-
 class DFSPHSolver(SPHBase):
     def __init__(self, particle_system):
         super().__init__(particle_system)
@@ -402,6 +400,7 @@ class DFSPHSolver(SPHBase):
         self.compute_DFSPH_factor()
         if self.enable_divergence_solver:
             self.divergence_solve()
+            
         self.compute_non_pressure_forces()
         self.predict_velocity()
         self.pressure_solve()

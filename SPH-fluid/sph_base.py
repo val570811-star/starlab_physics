@@ -44,8 +44,8 @@ class SPHBase:
         return res
 
     @ti.func
-    def cubic_kernel_derivative(self, r):
-        h = self.ps.support_radius
+    def cubic_kernel_derivative(self, r, h):
+        # h = self.ps.support_radius
         # derivative of cubic spline smoothing kernel
         k = 1.0
         if self.ps.dim == 1:
